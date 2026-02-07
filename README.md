@@ -113,7 +113,7 @@ Batch processing jobs
 
 The entire inference service is fully containerized.
 
-Why Docker?
+## Why Docker?
 
 Eliminates environment inconsistencies
 
@@ -175,8 +175,9 @@ Dockerized inference service
 
 Rollback & retraining strategy
 
-👤 Author
+## 👤 Author
 
-Matin Raheman Nadaf
+### Matin Raheman Nadaf
 B.Tech in Computer Science & Engineering
 Focus: MLOps, NLP, Production ML Systems
+
