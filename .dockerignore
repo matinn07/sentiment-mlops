@@ -1,0 +1,10 @@
+venv/
+mlruns/
+__pycache__/
+.git/
+.gitignore
+logs/
+results/
+*.pt
+*.bin
+*.safetensors
