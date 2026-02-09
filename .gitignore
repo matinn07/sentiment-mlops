@@ -1,20 +1,53 @@
-# Virtual environment
-venv/
-.env/
-
-# Python cache
+# =========================
+# Python
+# =========================
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.log
 
-# MLflow
+# =========================
+# Virtual environment
+# =========================
+venv/
+.env
+
+# =========================
+# ML / Data artifacts
+# =========================
 mlruns/
+results/
+model/
+data/*.csv
+data/*.npy
 
-# OS files
+# =========================
+# Logs
+# =========================
+logs/
+*.jsonl
+
+# =========================
+# HuggingFace / Transformers
+# =========================
+.cache/
+.cache/*
+**/.cache/
+
+# =========================
+# Docker
+# =========================
+*.tar
+
+# =========================
+# OS
+# =========================
 .DS_Store
+Thumbs.db
 
+# =========================
 # IDE
+# =========================
 .vscode/
 .idea/
-
-# Logs
-*.log

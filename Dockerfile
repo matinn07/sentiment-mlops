@@ -1,28 +1,43 @@
 FROM python:3.10-slim
 
-WORKDIR /app
+# ===============================
+# Environment
+# ===============================
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV TRANSFORMERS_CACHE=/app/.cache
+ENV HF_HOME=/app/.cache
 
-# Install system dependencies (needed for sklearn, torch)
+# ===============================
+# System deps
+# ===============================
 RUN apt-get update && apt-get install -y \
-    build-essential \
+    git \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only requirements first (cache layer)
+# ===============================
+# Workdir
+# ===============================
+WORKDIR /app
+
+# ===============================
+# Install Python deps
+# ===============================
 COPY requirements.txt .
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Install CPU-only torch first (important)
-RUN pip install --no-cache-dir \
-    torch==2.1.2+cpu \
-    -f https://download.pytorch.org/whl/torch_stable.html
+# ===============================
+# Copy project
+# ===============================
+COPY . .
 
-# Install rest of dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code and model
-COPY app/ app/
-COPY model/ model/
-
+# ===============================
+# Expose API port
+# ===============================
 EXPOSE 8000
 
+# ===============================
+# Start FastAPI
+# ===============================
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

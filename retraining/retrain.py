@@ -1,12 +1,10 @@
 import os
-import pandas as pd
+import json
+import numpy as np
 import torch
 import mlflow
 import mlflow.pyfunc
-import numpy as np
-
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+import pandas as pd
 
 from transformers import (
     DistilBertTokenizerFast,
@@ -18,21 +16,21 @@ from transformers import (
 # =============================
 # MLflow setup
 # =============================
-mlflow.set_experiment("sentiment-distilbert")
 MODEL_NAME = "sentiment-distilbert"
+mlflow.set_experiment("sentiment-retraining")
 
 # =============================
-# Load data
+# Load inference data
 # =============================
-df = pd.read_csv("data/processed.csv")
-df = df.sample(20000, random_state=42)
+texts, labels = [], []
 
-X_train, X_test, y_train, y_test = train_test_split(
-    df["clean_review"],
-    df["label"],
-    test_size=0.2,
-    random_state=42
-)
+with open("logs/inference_logs.jsonl", "r") as f:
+    for line in f:
+        d = json.loads(line)
+        texts.append(d["text"])
+        labels.append(d["prediction"])
+
+labels = pd.Series(labels)
 
 # =============================
 # Tokenizer
@@ -41,24 +39,17 @@ tokenizer = DistilBertTokenizerFast.from_pretrained(
     "distilbert-base-uncased"
 )
 
-train_enc = tokenizer(
-    list(X_train),
-    truncation=True,
+encodings = tokenizer(
+    texts,
     padding=True,
-    max_length=64
-)
-
-test_enc = tokenizer(
-    list(X_test),
     truncation=True,
-    padding=True,
     max_length=64
 )
 
 # =============================
 # Dataset
 # =============================
-class IMDBDataset(torch.utils.data.Dataset):
+class DriftDataset(torch.utils.data.Dataset):
     def __init__(self, encodings, labels):
         self.encodings = encodings
         self.labels = labels.reset_index(drop=True)
@@ -71,8 +62,7 @@ class IMDBDataset(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.labels)
 
-train_dataset = IMDBDataset(train_enc, y_train)
-test_dataset = IMDBDataset(test_enc, y_test)
+dataset = DriftDataset(encodings, labels)
 
 # =============================
 # Model
@@ -84,51 +74,26 @@ model = DistilBertForSequenceClassification.from_pretrained(
 model.to("cpu")
 
 # =============================
-# Metrics
-# =============================
-def compute_metrics(eval_pred):
-    logits, labels = eval_pred
-    preds = np.argmax(logits, axis=1)
-
-    precision, recall, f1, _ = precision_recall_fscore_support(
-        labels, preds, average="binary"
-    )
-    acc = accuracy_score(labels, preds)
-
-    return {
-        "accuracy": acc,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1
-    }
-
-# =============================
-# Training args
+# Training arguments
 # =============================
 training_args = TrainingArguments(
-    output_dir="./results",
+    output_dir="./retrain_results",
     per_device_train_batch_size=8,
-    per_device_eval_batch_size=8,
     num_train_epochs=1,
-    evaluation_strategy="epoch",
-    logging_dir="./logs",
     report_to="none",
-    save_strategy="epoch"
+    save_strategy="no"
 )
 
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=test_dataset,
-    compute_metrics=compute_metrics
+    train_dataset=dataset
 )
 
 # =============================
-# Train & eval
+# Retrain
 # =============================
 trainer.train()
-metrics = trainer.evaluate()
 
 # =============================
 # Save model locally (REQUIRED)
@@ -138,7 +103,7 @@ model.save_pretrained("model/")
 tokenizer.save_pretrained("model/")
 
 # =============================
-# Reference embeddings (for drift)
+# Update reference vectors
 # =============================
 def get_cls_embeddings(texts, tokenizer, model, batch_size=16):
     model.eval()
@@ -156,23 +121,19 @@ def get_cls_embeddings(texts, tokenizer, model, batch_size=16):
 
         with torch.no_grad():
             outputs = model.distilbert(**enc)
-            cls = outputs.last_hidden_state[:, 0, :]
-            all_emb.append(cls.cpu().numpy())
+            cls_emb = outputs.last_hidden_state[:, 0, :]
+            all_emb.append(cls_emb.cpu().numpy())
 
     return np.vstack(all_emb)
 
 os.makedirs("data", exist_ok=True)
 np.save(
     "data/reference_vectors.npy",
-    get_cls_embeddings(
-        list(X_train.sample(1000, random_state=42)),
-        tokenizer,
-        model
-    ).mean(axis=0)
+    get_cls_embeddings(texts, tokenizer, model).mean(axis=0)
 )
 
 # =============================
-# PyFunc wrapper (INLINE — FIX)
+# MLflow PyFunc wrapper (SAME AS train.py)
 # =============================
 class SentimentPyFunc(mlflow.pyfunc.PythonModel):
     def load_context(self, context):
@@ -205,14 +166,7 @@ class SentimentPyFunc(mlflow.pyfunc.PythonModel):
 # MLflow logging (CORRECT)
 # =============================
 with mlflow.start_run():
-    mlflow.log_param("model", "distilbert-base-uncased")
-    mlflow.log_param("epochs", 1)
-    mlflow.log_param("max_length", 64)
-
-    mlflow.log_metric("accuracy", metrics["eval_accuracy"])
-    mlflow.log_metric("precision", metrics["eval_precision"])
-    mlflow.log_metric("recall", metrics["eval_recall"])
-    mlflow.log_metric("f1", metrics["eval_f1"])
+    mlflow.log_param("retraining_samples", len(texts))
 
     mlflow.pyfunc.log_model(
         artifact_path="model",
@@ -221,4 +175,5 @@ with mlflow.start_run():
         registered_model_name=MODEL_NAME
     )
 
-print("✅ Training complete. Model registered in MLflow.")
+print("✅ Retraining complete. New model version registered in MLflow.")
+print("➡ Promote the new version to alias: production")
