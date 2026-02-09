@@ -1,43 +1,23 @@
 FROM python:3.10-slim
 
-# ===============================
-# Environment
-# ===============================
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV TRANSFORMERS_CACHE=/app/.cache
-ENV HF_HOME=/app/.cache
-
-# ===============================
-# System deps
-# ===============================
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# ===============================
-# Workdir
-# ===============================
 WORKDIR /app
 
-# ===============================
-# Install Python deps
-# ===============================
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+RUN pip install --upgrade pip
+
+# CPU-only PyTorch (NO CUDA)
+RUN pip install --no-cache-dir torch==2.1.2+cpu \
+    --index-url https://download.pytorch.org/whl/cpu
+
 COPY requirements.txt .
-RUN pip install --upgrade pip && pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# ===============================
-# Copy project
-# ===============================
-COPY . .
+COPY app /app/app
+COPY model /app/model
+COPY logs /app/logs
 
-# ===============================
-# Expose API port
-# ===============================
 EXPOSE 8000
 
-# ===============================
-# Start FastAPI
-# ===============================
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

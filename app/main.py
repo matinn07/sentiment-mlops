@@ -1,69 +1,90 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-import mlflow.pyfunc
 import json
 from datetime import datetime
 import os
 import pandas as pd
+import torch
+
+from transformers import (
+    DistilBertTokenizerFast,
+    DistilBertForSequenceClassification
+)
 
 # =============================
 # App setup
 # =============================
 app = FastAPI(title="Sentiment Analysis API")
 
-# =============================
-# Logging setup
-# =============================
-LOG_DIR = "logs"
+BASE_DIR = "/app"
+MODEL_DIR = os.path.join(BASE_DIR, "model", "artifacts", "model")
+LOG_DIR = os.path.join(BASE_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "inference_logs.jsonl")
+
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# =============================
-# MLflow model loading
-# =============================
-MODEL_URI = "models:/sentiment-distilbert/Production"
-model = mlflow.pyfunc.load_model(MODEL_URI)
+tokenizer = None
+model = None
 
 # =============================
-# Request schema
+# Load model on startup
+# =============================
+@app.on_event("startup")
+def load_model():
+    global tokenizer, model
+
+    tokenizer = DistilBertTokenizerFast.from_pretrained(
+        MODEL_DIR,
+        local_files_only=True
+    )
+
+    model = DistilBertForSequenceClassification.from_pretrained(
+        MODEL_DIR,
+        local_files_only=True
+    )
+
+    model.eval()
+    print("✅ Hugging Face model loaded directly")
+
+# =============================
+# Schemas
 # =============================
 class InputText(BaseModel):
     text: str
 
-# =============================
-# Response schema (NEW)
-# =============================
 class PredictionResponse(BaseModel):
     timestamp: str
     text: str
     prediction: int
-    model_stage: str
 
 # =============================
-# Health check
+# Health
 # =============================
 @app.get("/")
 def health():
-    return {
-        "status": "ok",
-        "model": "sentiment-distilbert",
-        "stage": "Production"
-    }
+    return {"status": "ok", "model_source": "huggingface-local"}
 
 # =============================
-# Prediction endpoint
+# Predict
 # =============================
 @app.post("/predict", response_model=PredictionResponse)
 def predict(input: InputText):
-    df = pd.DataFrame({"text": [input.text]})
-    prediction = model.predict(df)
-    pred_label = int(prediction[0])
+    inputs = tokenizer(
+        [input.text],
+        padding=True,
+        truncation=True,
+        max_length=64,
+        return_tensors="pt"
+    )
+
+    with torch.no_grad():
+        outputs = model(**inputs)
+        pred = int(torch.argmax(outputs.logits, dim=1).item())
 
     log_entry = {
         "timestamp": datetime.utcnow().isoformat(),
         "text": input.text,
-        "prediction": pred_label,
-        "model_stage": "Production"
+        "prediction": pred
     }
 
     with open(LOG_FILE, "a", encoding="utf-8") as f:

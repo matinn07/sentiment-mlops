@@ -24,7 +24,7 @@ mlflow.set_experiment("sentiment-retraining")
 # =============================
 texts, labels = [], []
 
-with open("logs/inference_logs.jsonl", "r") as f:
+with open("logs/inference_logs.jsonl", "r", encoding="utf-8") as f:
     for line in f:
         d = json.loads(line)
         texts.append(d["text"])
@@ -98,12 +98,14 @@ trainer.train()
 # =============================
 # Save model locally (REQUIRED)
 # =============================
-os.makedirs("model", exist_ok=True)
-model.save_pretrained("model/")
-tokenizer.save_pretrained("model/")
+MODEL_DIR = os.path.abspath("model")
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+model.save_pretrained(MODEL_DIR)
+tokenizer.save_pretrained(MODEL_DIR)
 
 # =============================
-# Update reference vectors
+# Update reference vectors (for drift)
 # =============================
 def get_cls_embeddings(texts, tokenizer, model, batch_size=16):
     model.eval()
@@ -133,16 +135,31 @@ np.save(
 )
 
 # =============================
-# MLflow PyFunc wrapper (SAME AS train.py)
+# MLflow PyFunc wrapper (CRITICAL FIX)
 # =============================
 class SentimentPyFunc(mlflow.pyfunc.PythonModel):
+
     def load_context(self, context):
+        # context.artifacts["model_dir"] might contain Windows backslashes
+        raw_path = context.artifacts["model_dir"]
+
+        # 🔥 FORCE POSIX PATH (critical)
+        model_path = raw_path.replace("\\", "/")
+
+        # Safety check (optional but good)
+        if not os.path.isdir(model_path):
+            raise ValueError(f"Model path does not exist: {model_path}")
+
         self.tokenizer = DistilBertTokenizerFast.from_pretrained(
-            context.artifacts["model_dir"]
+            model_path,
+            local_files_only=True
         )
+
         self.model = DistilBertForSequenceClassification.from_pretrained(
-            context.artifacts["model_dir"]
+            model_path,
+            local_files_only=True
         )
+
         self.model.eval()
 
     def predict(self, context, model_input):
@@ -162,8 +179,10 @@ class SentimentPyFunc(mlflow.pyfunc.PythonModel):
 
         return preds.numpy()
 
+
+
 # =============================
-# MLflow logging (CORRECT)
+# MLflow logging (FINAL & SAFE)
 # =============================
 with mlflow.start_run():
     mlflow.log_param("retraining_samples", len(texts))
@@ -171,9 +190,9 @@ with mlflow.start_run():
     mlflow.pyfunc.log_model(
         artifact_path="model",
         python_model=SentimentPyFunc(),
-        artifacts={"model_dir": "model"},
+        artifacts={"model_dir": MODEL_DIR},
         registered_model_name=MODEL_NAME
     )
 
 print("✅ Retraining complete. New model version registered in MLflow.")
-print("➡ Promote the new version to alias: production")
+print("➡ Promote the new version to alias: Production")
